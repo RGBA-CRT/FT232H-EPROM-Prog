@@ -1,0 +1,446 @@
+'FT232H-EPROM-Progのテストプログラム
+'テスト用名ので非常にきたない
+'いつかコード書き直す予定
+
+'AB-FT232HLib
+#include "..\D2XX.sbp"
+#include "..\MCP23017_Lib.sbp"
+#include "..\FT232HLib.sbp"
+'RGBALib
+#include <RGBALib.sbp>
+
+#include "ROM_Class.sbp"
+
+#console
+
+Print "FT232H-EPROM-PROGRAMMER Test Program - RGBA_CRT 2017"
+Print
+Print "Please use at your own risk!"
+Print 
+Dim ft AS *FT232H
+
+ft=new FT232H()
+if ft->listupDeviceToConsole()=FALSE Then End
+
+Dim ftID As DWord
+input "Select device >",ftID
+
+if ft->openDevice(ftID)=FALSE Then Print "OpenError" : End
+printf(ex"device #%02d open ok.\n\n",ftID)
+
+Dim ROM_SIZE AS DWord
+Input ex"Enter ROM Size (ex:32Mbit -> &H400000)\n>",ROM_SIZE
+if ROM_SIZE=0 Then ROM_SIZE=&H400000
+printf(ex"Rom Size = %dMbit\n\n",ROM_SIZE/&H100000*8)
+
+Print ex"All Commands:\n  1.WriteEnable     6.SetAddress Zero   11.AddressBusTest  \n  2.WriteDisable    7.WriteROM          12.FlashProgTest   \n  3.ReadTest        8.CompROM           13.FlashProg       "
+Print ex"  4.BufferTest      9.WriteTest         14.SetAddress  \n  5.DumpROM        10.EraseFlash        15.Rom<->File Check\n"
+Print ex"Command Menu :\n  5.DumpROM\n  7.WriteROM\n  8.CompROM\n 15.BlankCheck\n"
+Dim ff AS *FT232H_FLASH
+ff=New FT232H_FLASH(ft)
+
+Dim fe AS *FT232H_EPROM
+fe=New FT232H_EPROM(ft)
+fe->ROMEnable(TRUE)
+fe->ReadEnable(TRUE)
+
+Const BUFSIZE=64
+Dim i AS DWord,data AS Byte,fileName AS String
+Dim buf[1024+BUFSIZE] AS Byte
+i=&H1fe00/64-2
+
+Do
+
+	ft->sendCommands()
+	Input ">",ftID
+	if ftID=1 Then
+		fe->WriteEnable(TRUE)
+		'fe->ReadEnable(TRUE)
+		Print "Write enable"
+
+	Elseif ftID=2 Then
+		fe->WriteEnable(FALSE)
+		'fe->ReadEnable(FALSE)
+		Print "Write disable"
+
+	Else if ftID=3 Then
+		fe->AreaReadRequest(&HFF9D0,64)
+		ft->sendCommands()
+		ft->reciveData(buf,64)
+		Dump(buf,64,&Hff9d0)
+
+
+		/*fe->SetAddress(&H00000000)
+		buf[0]=fe->WriteByte(&H03)
+		ft->sendCommands()*/
+		
+	Elseif ftID=4 Then
+		buffertest()
+	Elseif ftID=5 Then
+		RomDumpFull(ROM_SIZE)'&H100000)
+		Print "saved to dump.bin"
+	Elseif ftID=6 then
+		i=0
+	Elseif ftID=7 Then
+		Input "Enter File Name : ",fileName
+		WriteROM(fileName,0)
+
+
+	Elseif ftID=8 Then
+		Input "Enter File Name : ",fileName
+		CompROM(fileName,0)
+
+	Elseif ftID=9 Then
+		Const tx ="書き込みテスト(kiban)"
+		fe->AreaWirte(&HFFa11,tx,lstrlen(tx))
+		ft->sendCommands()
+
+	Elseif ftID=10 Then
+		Input "Erase chip? [0/1] ",ftID
+		if ftID=1 Then
+			Print "Eraceing..."
+			ff->ChipErase()
+			Print "Done."
+		Endif
+		
+	Elseif ftID=11 Then
+		for i = 0 TO 32
+			ff->SetAddress(1<<i)
+			Print Hex$(1<<i)
+			ft->sendCommands()
+			Input "enter>",ftID
+		Next
+
+	Elseif ftID=12 Then
+	'	ff->ProtectDisable()
+		ft->sendCommands()
+		
+		ff->WriteStart()
+		ff->FlashCommand(&H0001,&H31)
+		ff->FlashCommand(&H0002,&H32)
+		ff->FlashCommand(&H0003,&H33)
+	Elseif ftID=13 Then
+		Input "Enter File Name : ";fileName
+		WriteFlash(fileName,0)
+
+	Elseif ftID=14 Then
+		Input ex"Enter Address (ex:&H0710)\n>",i
+		i=i/BUFSIZE
+
+	Elseif ftID=15 then 
+		Dim ffCount AS DWord,i2 AS Long
+		ffCount=0
+		i2=0
+		Const CHECK_STEP = 8
+		For i=0 To (ROM_SIZE/1024) Step CHECK_STEP
+			printf(ex"checking...%d%% (%d%%)         ",(i/(ROM_SIZE/1024))*100,(ffCount/(i*1024))*100*CHECK_STEP)
+			ConsoleReturnLine()
+			
+			fe->AreaReadRequest(i*1024,1024)
+			ft->sendCommands()
+			ft->reciveData(buf,1024)
+			For i2=0 To 1023 
+				if buf[i2]=&HFF Then ffCount++
+			Next i2
+		Next i
+		printf(ex"\nBlank率：%d%%\n",ffCount/(ROM_SIZE)*100*CHECK_STEP)
+	Elseif ftID=16 then 
+		i=0
+	Else
+'		if i=0 Then i=1
+		fe->AreaReadRequest(i*BUFSIZE,BUFSIZE)
+		ft->sendCommands()
+		ft->reciveData(buf,BUFSIZE)
+		printf(ex"[%04X] %04X\n",i,data)
+		Dump(buf,BUFSIZE,i*BUFSIZE)
+		i++' = NOT(i)
+	'	i=264
+	Endif
+	Print
+Loop
+
+Const FTE_SECTOR_SIZE = 64*4
+Sub RomDumpFull(length AS DWord)
+	Dim i AS DWord,out AS File,buf AS BytePtr
+	buf=calloc(FTE_SECTOR_SIZE)
+	out.openFile("dump.bin",GENERIC_WRITE)
+	Do
+		if i Mod 10 = 0 Then printf(ex"[DUMP] ADDRESS:%08X/%08X ... %d%%\n",i*FTE_SECTOR_SIZE,length,((i*FTE_SECTOR_SIZE)/length*100) AS DWord):ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H2))
+		fe->AreaReadRequest(i*FTE_SECTOR_SIZE,FTE_SECTOR_SIZE)
+		ft->sendCommands()
+		ft->reciveData(buf,FTE_SECTOR_SIZE)
+		out.write(buf,FTE_SECTOR_SIZE)
+		i++
+		if i*FTE_SECTOR_SIZE => length Then ExitDo
+	Loop
+	out.close()
+	free(buf)
+
+End Sub
+
+Sub WriteROM(fileName AS BytePtr,offset AS DWord)
+	Dim in AS File
+	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
+
+	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
+	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
+
+	buffer = calloc(in.length())
+	in.read(buffer,in.length())
+	length = in.length()
+	i=offset
+
+	Dim lap_s AS DWord,lap_e AS DWord
+	lap_s=GetTickCount()
+	do
+		printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
+		ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H1))
+		
+		if fe->AreaWirte(i,buffer+i,FTE_SECTOR_SIZE)=FALSE Then
+			printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",i,buffer[i])
+			input ">",tmp
+
+			Print
+			if tmp="e" Then ExitDo
+			if tmp="s" Then 
+				Print "skip"
+			Else
+				continue
+			End If
+		End If
+
+		i+=FTE_SECTOR_SIZE
+		if i => length Then ExitDo
+
+	Loop
+	lap_e=GetTickCount()
+	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
+
+	ft->sendCommands()
+	in.close()
+End Sub
+
+Sub WriteFlash(fileName AS BytePtr,offset AS DWord)
+	Dim in AS File
+	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
+
+	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
+	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
+
+	buffer = calloc(in.length())
+	in.read(buffer,in.length())
+	length = 128*1024'in.length()
+	i=offset
+
+	Dim lap_s AS DWord,lap_e AS DWord
+	lap_s=GetTickCount()
+	do
+		printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
+		
+		if ff->AreaWirte(i,buffer+i,128)=FALSE Then
+			printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",i,buffer[i])
+			input ">",tmp
+
+			Print
+			if tmp="e" Then ExitDo
+			if tmp<>"s" Then continue
+		End If
+
+		i+=128
+		if i > length Then ExitDo
+
+	Loop
+	lap_e=GetTickCount()
+	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
+
+	ft->sendCommands()
+	in.close()
+End Sub
+
+Sub CompROM(fileName AS BytePtr,offset AS DWord)
+	Dim in AS File
+	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
+	Dim romBuf[FTE_SECTOR_SIZE] AS Byte
+
+	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
+	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
+
+	buffer = calloc(in.length())
+	in.read(buffer,in.length())
+	length = in.length()
+	i=offset
+
+	Dim lap_s AS DWord,lap_e AS DWord
+	lap_s=GetTickCount()
+	do
+		if i Mod 1024 = 0 Then printf(ex"[CHECK] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
+		
+		fe->AreaReadRequest(i,FTE_SECTOR_SIZE)
+		ft->sendCommands()
+		ft->reciveData(romBuf,FTE_SECTOR_SIZE)
+
+		Dim c AS DWord
+		For c=0 To FTE_SECTOR_SIZE-1
+			if buffer[i+c]<>romBuf[c] Then
+				printf("[CHECK] FOUND ERROR AT %08X HOST:%02X != ROM:%02X ==> ",i+c,buffer[i+c],romBuf[c])
+				if isFixableBits(buffer[i+c],romBuf[c])=FALSE Then
+					SetConsoleColor(CC_RED)
+					Print "修復不能"
+					SetConsoleColor(CC_DEFAULT)
+				
+				Else
+					SetConsoleColor(CC_GREEN)
+					Print "修復可能"
+					SetConsoleColor(CC_DEFAULT)
+				End If
+					Input "fix it?[y/n/a]",tmp
+					Print
+					if tmp="y" Then
+						fe->AreaWirte(i+c,buffer+i+c,1)
+					Elseif tmp="a" Then
+						fe->AreaWirte(i,buffer+i,FTE_SECTOR_SIZE)
+					Else
+						Goto *FTE_CR_NOFIX
+					End If
+					Continue
+			End If
+			*FTE_CR_NOFIX
+		Next c
+
+		i+=FTE_SECTOR_SIZE
+		if i > length Then ExitDo
+
+	Loop
+	lap_e=GetTickCount()
+	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
+
+	ft->sendCommands()
+	in.close()
+End Sub
+
+Function isFixableBits(HostData AS Byte,RomData AS Byte)
+	Dim diff AS Byte,RomMask AS Byte
+	diff=HostData xor RomData	'違うとこ探す
+	RomMask = RomData And diff	'ROMが0になってるビットを洗い出す。diffのビットが一つでも消えてたらそういうこと
+	if diff=RomMask Then
+		isFixableBits=TRUE
+	Else
+		isFixableBits=FALSE
+	Endif
+End Function
+
+/*
+Sub WriteROM(fileName AS BytePtr,offset AS DWord)
+	Dim in AS File
+	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS DWord
+	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
+	buffer = calloc(in.length())
+	in.read(buffer,in.length())
+'	length = &H4200+16+1024'in.length()
+	length = in.length()
+	i=offset
+	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
+
+	Dim lap_s AS DWord,lap_e AS DWord
+	lap_s=GetTickCount()
+	do
+		if i Mod 1024 = 0 Then printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
+		fe->SetAddress(i)
+		if fe->WriteByte(buffer[i])<>buffer[i] Then
+			printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",i,buffer[i])
+			input ">",tmp
+			continue
+		End If
+		i++
+		if i > length Then ExitDo
+	Loop
+	lap_e=GetTickCount()
+	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
+
+	ft->sendCommands()
+	in.close()
+End Sub*/
+/*
+Const FTE_PATCH_BUF_SIZE = 1024
+Sub PatchROM(fileName AS BytePtr)
+	Dim in AS File
+	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String,fix_c AS DWord
+	Dim readBuf[FTE_PATCH_BUF_SIZE] AS Byte
+
+	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
+
+	buffer = calloc(in.length())
+	in.read(buffer,in.length())
+'	length = &H4200+16+1024'in.length()
+	length = in.length()
+'	i=&H4200
+	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
+
+	Dim lap_s AS DWord,lap_e AS DWord
+	lap_s=GetTickCount()
+	do
+		Input "[PATCH]Input Address : ",i
+		if i < 0 Then ExitDo
+		
+		Print "FILE BUFFER : "
+		Dump(buffer + i And &HFFFFFFF0 ,FTE_PATCH_BUF_SIZE,i And &HFFFFFFF0)
+
+		fe->AreaReadRequest(i And &HFFFFFFF0,FTE_PATCH_BUF_SIZE)
+		ft->sendCommands()
+		ft->reciveData(readBuf,FTE_PATCH_BUF_SIZE)
+		Print "ROM DATA : "
+		Dump(readBuf,FTE_PATCH_BUF_SIZE,i And &HFFFFFFF0)
+
+		fe->SetAddress(i)
+
+		printf(ex"[PATCH] %08X:%02X <- %02X\n",i,buffer[i],readBuf[i And &H0F])
+		Input "Fix it?[y/n] ",tmp
+		if tmp="y" Then
+			For fix_c=(i And &HFFFFFFF0) To FTE_PATCH_BUF_SIZE+(i And &HFFFFFFF0)-1
+				if buffer[fix_c]<>readBuf[fix_c-(i And &HFFFFFFF0)] Then
+					printf(ex"[PATCH] %08X:%02X <- %02X\n",fix_c,buffer[fix_c],readBuf[fix_c-(i And &HFFFFFFF0)])
+					Input "Fix it?[y/n] ",tmp
+
+					if tmp="y" Then
+						fe->SetAddress(fix_c)
+
+						if fe->WriteByte(buffer[fix_c])<>buffer[fix_c] Then
+							printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",fix_c,buffer[fix_c])
+							input ">",tmp
+							continue
+						End If
+					End If
+				End If
+			Next i
+		End If
+			
+
+		fe->AreaReadRequest(i And &HFFFFFFF0,FTE_PATCH_BUF_SIZE)
+		ft->sendCommands()
+		ft->reciveData(readBuf,FTE_PATCH_BUF_SIZE)
+		Print "FIXED ROM DATA : "
+		Dump(readBuf,FTE_PATCH_BUF_SIZE,i And &HFFFFFFF0)
+				
+				Print 
+				Print
+
+		ft->sendCommands()
+	Loop
+	lap_e=GetTickCount()
+	printf(ex"[patch] end, time:%d\n",lap_e-lap_s)
+
+	ft->sendCommands()
+	in.close()
+End Sub
+*/
+Sub buffertest()
+	Dim dat AS Byte
+	Dim i AS DWord
+	Do
+		printf("[%d]",i)
+		ft->reciveData(VarPtr(dat),1)
+		printf(ex"%X\n",dat)
+		i++
+	Loop
+End Sub
+
