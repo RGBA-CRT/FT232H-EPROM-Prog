@@ -26,15 +26,13 @@ Public
 		ft->gpio->setADBusDir(&HF0)
 		mcp=new FT232H_MCP23017(ft,3)
 
-		ROMEnable(FALSE)
-		ReadEnable(FALSE)
-
 		mcp->SetPort(&H0000,&H0000)
+		SetLatch(0)
+		
+		ROMEnable(TRUE)
+		ReadEnable(TRUE)
 
-		SetAddress(&H00000000)
-			ft->gpio->setADBusBit(FT_EPROM_LATCH_PIN,1)		'LATCH START
-			mcp->SetPortValB(&H00)							'LATCH SET
-			ft->gpio->setADBusBit(FT_EPROM_LATCH_PIN,0)		'LATCH HOLD
+		mcp->SetPortValWord(0)
 
 		WriteEnable(FALSE)
 		Address=0
@@ -57,10 +55,10 @@ Public
 	End Sub
 
 	Sub SetAddress(adr AS DWord)
-		'変更の必要がある時だけLATCH ->エラー回復用に毎回
-		'if (adr xor Address) >> 16 Then
+		'変更の必要がある時だけLATCH 
+		if (adr xor Address) >> 16 Then
 			SetLatch(adr>>16)
-		'End If
+		End If
 
 		mcp->SetPortValWord(adr AS Word)
 
@@ -82,12 +80,12 @@ Public
 		ROMEnable(TRUE)
 		ReadEnable(TRUE)
 		if dir=FTE_OUTPUT Then SetDatabusDirection(FTE_INPUT)
-		ft->addCommand(ex"\x9c\xa0\x00",3)	'wait
+	'	ft->addCommand(ex"\x9c\xa0\x00",3)	'wait
 		Do
 			SetAddress(adr+i)
 			ROMEnable(TRUE)
 			ReadEnable(TRUE)
-			ft->addCommand(ex"\x9c\x09\x00",3)
+	'		ft->addCommand(ex"\x9c\x09\x00",3)
 			ft->gpio->ACBusReadRequest()
 			i++
 			if length<=i Then ExitDo

@@ -44,7 +44,7 @@ fe=New FT232H_EPROM(ft)
 fe->ROMEnable(TRUE)
 fe->ReadEnable(TRUE)
 
-Const BUFSIZE=64
+Const BUFSIZE=64*4
 Dim i AS DWord,data AS Byte,fileName AS String
 Dim buf[1024+BUFSIZE] AS Byte
 i=&H1fe00/64-2
@@ -159,13 +159,22 @@ Do
 	Print
 Loop
 
-Const FTE_SECTOR_SIZE = 64*4
+Const FTE_SECTOR_SIZE = 64*64
 Sub RomDumpFull(length AS DWord)
-	Dim i AS DWord,out AS File,buf AS BytePtr
+	Dim i AS DWord,out AS File,buf AS BytePtr,last AS DWord,qtes AS DWord
 	buf=calloc(FTE_SECTOR_SIZE)
 	out.openFile("dump.bin",GENERIC_WRITE)
 	Do
-		if i Mod 10 = 0 Then printf(ex"[DUMP] ADDRESS:%08X/%08X ... %d%%\n",i*FTE_SECTOR_SIZE,length,((i*FTE_SECTOR_SIZE)/length*100) AS DWord):ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H2))
+		if i Mod 10 = 0 Then 
+			printf(ex"[DUMP] ADDRESS%08X/%08X ... %3d%% [%3dKB/s]\n", _
+				i*FTE_SECTOR_SIZE,length,((i*FTE_SECTOR_SIZE)/length*100) AS DWord, _
+				( (FTE_SECTOR_SIZE) / ((GetTickCount()-last)/1000)/1000   ) AS DWord, _
+			) 
+		'	ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H2))
+		'	flush(ft->hFT)
+		Endif
+
+		last=GetTickCount()
 		fe->AreaReadRequest(i*FTE_SECTOR_SIZE,FTE_SECTOR_SIZE)
 		ft->sendCommands()
 		ft->reciveData(buf,FTE_SECTOR_SIZE)
@@ -177,7 +186,17 @@ Sub RomDumpFull(length AS DWord)
 	free(buf)
 
 End Sub
+	Sub flush(hFT AS HANDLE)
+		Dim ftStatus As Long,bufsize As DWord,buf As BytePtr,dwAB As DWord
+		
+		ftStatus = ftStatus or FT_GetQueueStatus(hFT, bufsize)		 ' Get the number of bytes in the FT2232H receive buffer
+		buf=calloc(bufsize)
+		if bufsize>0 then Print bufsize
 
+		if (ftStatus = FT_OK) And  (bufsize > 0) Then _
+			FT_Read(hFT, buf, bufsize, dwAB)  'Read out the data from FT2232H receive buffer
+		free(buf)
+	End Sub
 Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 	Dim in AS File
 	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String

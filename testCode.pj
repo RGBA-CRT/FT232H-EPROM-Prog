@@ -1,0 +1,23 @@
+' ActiveBasic Project file.
+
+#VERSION=9
+
+#MODULETYPE=0
+
+#NAME=FTLIB
+
+#PLATFORM=32
+
+#USEWINDOW=0
+
+#OPTION=&H00010000
+
+#OUTPUT_RELEASE=.\testCode.exe
+
+#OUTPUT_DEBUG=.\testCode_debug.exe
+
+#RESOURCE=0
+
+#SOURCE
+testCode.abp
+ROM_Class.sbp
