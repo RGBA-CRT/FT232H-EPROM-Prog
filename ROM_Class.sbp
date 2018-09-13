@@ -54,9 +54,9 @@ Public
 		End If
 	End Sub
 
-	Sub SetAddress(adr AS DWord)
+	Sub SetAddress(adr AS DWord)(forceLatch As BOOL)
 		'•ÏX‚Ì•K—v‚ª‚ ‚éŽž‚¾‚¯LATCH 
-		if (adr xor Address) >> 16 Then
+		if (adr xor Address) >> 16 or forceLatch Then
 			SetLatch(adr>>16)
 		End If
 
@@ -93,7 +93,7 @@ Public
 	End Sub
 
 	Sub WriteEnable(ef AS BOOL)
-		ft->gpio->setADBusBit(FT_EPROM_VPP_PIN,(ef) AND &H01)
+		ft->gpio->setADBusBit(FT_EPROM_VPP_PIN,not(ef) AND &H01)
 		if ef=FALSE Then
 			SetDatabusDirection(FTE_INPUT)
 		Else
@@ -135,9 +135,9 @@ Public
 		ft->flush()
 
 		For i=0 To length-1
-			SetAddress(adr+i)
+			SetAddress(adr+i,TRUE)
 
-			WriteByte(adr+i,buffer[i])
+			WriteByte(buffer[i])
 
 			if i Mod &H10=0 Then ft->sendCommands()
 		Next i
@@ -158,10 +158,11 @@ Public
 				ExitFor
 			End If
 		Next i
+
 		free(checkBuf)
 	End Function
 	
-	Sub WriteByte(Address AS DWord,data AS Byte)
+	Sub WriteByte(data AS Byte)
 		WriteStart()
 
 		'PROGRAM
@@ -173,11 +174,14 @@ Public
 		ft->addCommand(ex"\x9c\x20\x00",3)	'Wait
 
 		SetData(data)	'SET WRITE DATA
-		ROMEnable(TRUE)						'WRITE PULSE START
+	'	ROMEnable(TRUE)						'WRITE PULSE START
+		WriteEnable(TRUE)
 		SetData(data)	'SET WRITE DATA
 		ft->addCommand(ex"\x9c\xf0\x00",3)	'wait 55us
 		SetData(data)	'SET WRITE DATA
-		ROMEnable(FALSE)					'WRITE PULSE END
+	'	ROMEnable(FALSE)					'WRITE PULSE END
+	
+		WriteEnable(FALSE)
 
 		'wait 4us
 		ft->addCommand(ex"\x9c\x20\x00",3)	'wait
@@ -189,9 +193,9 @@ Public
 	
 Private
 	Sub WriteStart()
-		ROMEnable(FALSE)
-		ReadEnable(FALSE)
-		WriteEnable(TRUE)
+		ROMEnable(TRUE)
+		ReadEnable(TRUE)
+		WriteEnable(FALSE)
 	End Sub
 	
 	Sub WriteEnd()

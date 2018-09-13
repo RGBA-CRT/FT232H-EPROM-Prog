@@ -13,14 +13,14 @@
 
 #console
 
-Print "FT232H-EPROM-PROGRAMMER Test Program - RGBA_CRT 2017"
+Print "FT232H-EPROM-PROGRAMMER Test Program - RGBA_CRT 2017 v1.1"
 Print
 Print "Please use at your own risk!"
 Print 
 Dim ft AS *FT232H
 
 ft=new FT232H()
-if ft->listupDeviceToConsole()=FALSE Then End
+if ft->listupDeviceToConsole()=FALSE Then Input "[PRESS ENTER]",ft:End
 
 Dim ftID As DWord
 input "Select device >",ftID
@@ -82,11 +82,13 @@ Do
 	Elseif ftID=6 then
 		i=0
 	Elseif ftID=7 Then
+		Print "Write ROM"
 		Input "Enter File Name : ",fileName
 		WriteROM(fileName,0)
 
 
 	Elseif ftID=8 Then
+		Print "comp ROM"
 		Input "Enter File Name : ",fileName
 		CompROM(fileName,0)
 
@@ -146,6 +148,12 @@ Do
 		printf(ex"\nBlank—¦F%d%%\n",ffCount/(ROM_SIZE)*100*CHECK_STEP)
 	Elseif ftID=16 then 
 		i=0
+
+	Elseif ftID=17 then 
+		Print "Erace ROM (zero fill) "
+		Input "continue? (y/n) >",fileName
+		if fileName="y" then ZeroFillROM(0,ROM_SIZE)
+
 	Else
 '		if i=0 Then i=1
 		fe->AreaReadRequest(i*BUFSIZE,BUFSIZE)
@@ -213,7 +221,6 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 	lap_s=GetTickCount()
 	do
 		printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
-		ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H1))
 		
 		if fe->AreaWirte(i,buffer+i,FTE_SECTOR_SIZE)=FALSE Then
 			printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",i,buffer[i])
@@ -233,10 +240,45 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 
 	Loop
 	lap_e=GetTickCount()
+	flush(ft->hFT)
 	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
+
+	free(buffer)
 
 	ft->sendCommands()
 	in.close()
+End Sub
+
+Sub ZeroFillROM(offset As DWord , RomSize AS DWord)
+	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
+	Dim ProcSize As DWord
+
+	ProcSize=FTE_SECTOR_SIZE*2
+	buffer = calloc(ProcSize)
+	FillMemory(buffer,ProcSize,0)
+	length = RomSize
+	i=offset
+
+	Dim lap_s AS DWord,lap_e AS DWord
+	lap_s=GetTickCount()
+	do
+		printf(ex"[ZEROFILL] ADDRESS:%08X/%08X ... %d%%  \n",i,length,((i)/length*100) AS DWord)
+		
+		if fe->AreaWirte(i,buffer,ProcSize)=FALSE Then
+			printf(ex"[ZEROFILL] write error at Address 0x%08X:%02X\n\n",i,buffer[0])
+		End If
+
+		i+=ProcSize
+		if i => length Then ExitDo
+
+	Loop
+	lap_e=GetTickCount()
+	flush(ft->hFT)
+	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
+
+	free(buffer)
+
+	ft->sendCommands()
 End Sub
 
 Sub WriteFlash(fileName AS BytePtr,offset AS DWord)
