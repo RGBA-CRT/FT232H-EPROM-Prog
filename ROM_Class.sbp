@@ -10,6 +10,9 @@ Enum FT_EPROM_IO
 	FTE_OUTPUT
 End Enum
 
+Const CC_CE = 1
+Const CC_OE = 2
+Const CC_WE = 4
 Class FT232H_PPROM_BASE
 Protected 
 	dummy AS DWord
@@ -18,6 +21,7 @@ Protected
 	dir AS FT_EPROM_IO
 	ft AS *FT232H
 	mcp As *FT232H_MCP23017
+	controlCache AS DWord
 Public
 	Sub init(ftc AS *FT232H)
 		ft=ftc
@@ -29,6 +33,8 @@ Public
 		mcp->SetPort(&H0000,&H0000)
 		SetLatch(0)
 		
+		controlCache = CC_WE
+
 		ROMEnable(TRUE)
 		ReadEnable(TRUE)
 
@@ -42,10 +48,27 @@ Public
 	End Sub
 
 	Sub ROMEnable(ef AS BOOL)
+		if ef then
+			if controlCache And CC_CE Then exit sub
+			controlCache or= CC_CE
+		Else
+			if Not(controlCache) And CC_CE Then exit sub
+			controlCache and= not(CC_CE)
+		End If
+
 		ft->gpio->setADBusBit(FT_EPROM_ENABLE_PIN,not(ef) AND &H01)
+
 	End Sub
 
-	Sub ReadEnable(ef AS BOOL)
+	Sub ReadEnable(ef AS BOOL)		
+		if ef then
+			if controlCache And CC_OE Then exit sub
+			controlCache or= CC_OE
+		Else
+			if Not(controlCache) And CC_OE Then exit sub
+			controlCache and= not(CC_OE)
+		End If
+
 		ft->gpio->setADBusBit(FT_EPROM_READ_ENABLE_PIN,not(ef) AND &H01)
 		if ef=TRUE Then
 			SetDatabusDirection(FTE_INPUT)
@@ -72,6 +95,7 @@ Public
 
 	Sub ReadDataRequest()
 		if dir=FTE_OUTPUT Then SetDatabusDirection(FTE_INPUT)
+		ft->addCommand(ex"\x9c\x39\x00",3)				'Wait 13us
 		ft->gpio->ACBusReadRequest()
 	End Sub
 
@@ -92,7 +116,15 @@ Public
 		Loop
 	End Sub
 
-	Sub WriteEnable(ef AS BOOL)
+	Sub WriteEnable(ef AS BOOL)		
+		if ef then
+			if controlCache And CC_WE Then exit sub
+			controlCache or= CC_WE
+		Else
+			if Not(controlCache) And CC_WE Then exit sub
+			controlCache and= not(CC_WE)
+		End If
+
 		ft->gpio->setADBusBit(FT_EPROM_VPP_PIN,not(ef) AND &H01)
 		if ef=FALSE Then
 			SetDatabusDirection(FTE_INPUT)
@@ -132,16 +164,18 @@ Public
 	Function AreaWirte(adr AS DWord,buffer AS BytePtr,length AS DWord) AS BOOL
 		Dim i AS DWord,checkBuf AS BytePtr,tmp AS DWord
 
-		ft->flush()
+	'	ft->flush()
 
+		WriteStart()
 		For i=0 To length-1
 			SetAddress(adr+i,TRUE)
 
 			WriteByte(buffer[i])
 
-			if i Mod &H10=0 Then ft->sendCommands()
-		Next i
-		
+			'if i Mod &H10=0 Then ft->sendCommands("AreaWrite")
+		Next i		
+		WriteEnd()
+
 		'ft->addCommand(ex"\x9c\xa0\x00",3)	'wait 55us 0x0080
 
 		AreaWirte=TRUE '戻り値：OK
@@ -149,7 +183,7 @@ Public
 		'書き込みチェック
 		checkBuf = calloc(length+5)
 		fe->AreaReadRequest(adr,length)
-		ft->sendCommands()
+		ft->sendCommands("[FT232H_EPROM] AreaWrite")
 		ft->reciveData(checkBuf,length)
 
 		For i=0 To length-1
@@ -163,32 +197,30 @@ Public
 	End Function
 	
 	Sub WriteByte(data AS Byte)
-		WriteStart()
 
 		'PROGRAM
-		ft->addCommand(ex"\x9c\x09\x00",3)	'Wait 
+		'ft->addCommand(ex"\x9c\x09\x00",3)	'Wait 
 		
 		SetData(data)	'SET WRITE DATA
-		SetData(data)	'SET WRITE DATA
+		'SetData(data)	'SET WRITE DATA
 
 		ft->addCommand(ex"\x9c\x20\x00",3)	'Wait
 
-		SetData(data)	'SET WRITE DATA
+		'SetData(data)	'SET WRITE DATA
 	'	ROMEnable(TRUE)						'WRITE PULSE START
 		WriteEnable(TRUE)
-		SetData(data)	'SET WRITE DATA
-		ft->addCommand(ex"\x9c\xf0\x00",3)	'wait 55us
-		SetData(data)	'SET WRITE DATA
+		'SetData(data)	'SET WRITE DATA
+		ft->addCommand(ex"\x9c\xff\x00",3)	'wait 55us
+		'SetData(data)	'SET WRITE DATA
 	'	ROMEnable(FALSE)					'WRITE PULSE END
 	
 		WriteEnable(FALSE)
 
 		'wait 4us
-		ft->addCommand(ex"\x9c\x20\x00",3)	'wait
+		ft->addCommand(ex"\x9c\x40\x00",3)	'wait
 
-		SetData(&HFF)'次のデータで誤らないように	
+		'SetData(&HFF)'次のデータで誤らないように	
 
-		WriteEnd()
 	End Sub
 	
 Private
@@ -226,7 +258,7 @@ Public
 		FlashCommand(&H5555,&H10)
 		
 		ft->addCommand(ex"\x9c\xf0\x00",3)	'wait 55us 0x0080
-		ft->sendCommands()
+		ft->sendCommands("[FT232H_FLASH] ChipErase")
 	End Sub
 
 	Sub WriteWait()

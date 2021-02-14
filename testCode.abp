@@ -5,7 +5,7 @@
 'AB-FT232HLib
 #include "..\D2XX.sbp"
 #include "..\MCP23017_Lib.sbp"
-#include "..\FT232HLib.sbp"
+#include "..\FT232HLib_debug.sbp"
 'RGBALib
 #include <RGBALib.sbp>
 
@@ -19,17 +19,23 @@ Print "Please use at your own risk!"
 Print 
 Dim ft AS *FT232H
 
-ft=new FT232H()
+ft=new FT232H((4 * 1024 * 1024) As DWord)
 if ft->listupDeviceToConsole()=FALSE Then Input "[PRESS ENTER]",ft:End
 
 Dim ftID As DWord
-input "Select device >",ftID
+if ft->getNumberOfDevice() > 1 Then
+	input "Select device >",ftID
+Else 
+	ftID=0
+End If
 
 if ft->openDevice(ftID)=FALSE Then Print "OpenError" : End
 printf(ex"device #%02d open ok.\n\n",ftID)
 
+Dim rom_size_str As String
 Dim ROM_SIZE AS DWord
-Input ex"Enter ROM Size (ex:32Mbit -> &H400000)\n>",ROM_SIZE
+Input ex"Enter ROM Size (ex:32Mbit -> 4MB)\n>",rom_size_str
+rcAsciiToInt(rom_size_str, VarPtr(ROM_SIZE),10,TRUE)
 if ROM_SIZE=0 Then ROM_SIZE=&H400000
 printf(ex"Rom Size = %dMbit\n\n",ROM_SIZE/&H100000*8)
 
@@ -47,18 +53,18 @@ fe->ReadEnable(TRUE)
 Const BUFSIZE=64*4
 Dim i AS DWord,data AS Byte,fileName AS String
 Dim buf[1024+BUFSIZE] AS Byte
-i=&H1fe00/64-2
+i=0'&H1fe00/64-2
 
 Do
 
-	ft->sendCommands()
+	ft->sendCommands("before menu")
 	Input ">",ftID
-	if ftID=1 Then
+	if ftID=9999901 Then
 		fe->WriteEnable(TRUE)
 		'fe->ReadEnable(TRUE)
 		Print "Write enable"
 
-	Elseif ftID=2 Then
+	Elseif ftID=999902 Then
 		fe->WriteEnable(FALSE)
 		'fe->ReadEnable(FALSE)
 		Print "Write disable"
@@ -126,11 +132,12 @@ Do
 		WriteFlash(fileName,0)
 
 	Elseif ftID=14 Then
-		Input ex"Enter Address (ex:&H0710)\n>",i
+		Input ex"Enter Address (ex:&H0710)\n>",fileName
+		rcAsciiToInt(fileName,VarPtr(i))
 		i=i/BUFSIZE
 
 	Elseif ftID=15 then 
-		Dim ffCount AS DWord,i2 AS Long
+		Dim ffCount AS DWord,i2 AS Long, errCount As BOOL
 		ffCount=0
 		i2=0
 		Const CHECK_STEP = 8
@@ -141,11 +148,42 @@ Do
 			fe->AreaReadRequest(i*1024,1024)
 			ft->sendCommands()
 			ft->reciveData(buf,1024)
+			
 			For i2=0 To 1023 
-				if buf[i2]=&HFF Then ffCount++
+				if buf[i2]=&HFF Then 
+					ffCount++
+				Else
+					if errCount=0 Then printf(ex"not FF at 0x%08X  \n",i*1024 + i2)
+					errCount++
+				End If
 			Next i2
 		Next i
 		printf(ex"\nBlankó¶ÅF%d%%\n",ffCount/(ROM_SIZE)*100*CHECK_STEP)
+		if ffCount <> 0 Then
+			PrintPtr(ex"Blank!!!\n")
+		Else
+			PrintPtr(ex"NOT BLANK\n")
+		End If
+
+	Elseif ftID=18 then 
+		ffCount=0
+		i2=0
+		For i=0 To (ROM_SIZE/1024) 
+			printf(ex"deep checking...%d%% (%d%%)         ",(i/(ROM_SIZE/1024))*100,(ffCount/(i*1024))*100*CHECK_STEP)
+			ConsoleReturnLine()
+			
+			fe->AreaReadRequest(i*1024,1024)
+			ft->sendCommands()
+			ft->reciveData(buf,1024)
+			For i2=0 To 1023 
+				if buf[i2]<>&HFF Then
+					printf(ex"\n[DeepBlankCheck] ROM is not empty ::: %08X:%02X\n\n",i*1024+i2,buf[i2])
+					goto *DEEP_CHECK_EXIT
+				endif
+			Next i2
+		Next i
+		printf(ex"\nROM is Empty.\n")
+*DEEP_CHECK_EXIT
 	Elseif ftID=16 then 
 		i=0
 
@@ -154,10 +192,30 @@ Do
 		Input "continue? (y/n) >",fileName
 		if fileName="y" then ZeroFillROM(0,ROM_SIZE)
 
+	Elseif ftID=99 Then
+		fe->AreaReadRequest(i*BUFSIZE,BUFSIZE)
+		ft->sendCommands()
+		ft->reciveData(buf,BUFSIZE)
+		printf(ex"[%04X] %04X\n",i,data)
+		Dump(buf,BUFSIZE,i*BUFSIZE)
+
+	Elseif ftID=98 Then
+		fe->AreaReadRequest(&H7FA0,BUFSIZE)
+		ft->sendCommands()
+		ft->reciveData(buf,BUFSIZE)
+		printf(ex"[%04X] %04X\n",i,data)
+		Dump(buf,BUFSIZE,i*BUFSIZE)
+
+		fe->AreaReadRequest(&HFFA0,BUFSIZE)
+		ft->sendCommands()
+		ft->reciveData(buf,BUFSIZE)
+		printf(ex"[%04X] %04X\n",i,data)
+		Dump(buf,BUFSIZE,i*BUFSIZE)
+
 	Else
 '		if i=0 Then i=1
 		fe->AreaReadRequest(i*BUFSIZE,BUFSIZE)
-		ft->sendCommands()
+		ft->sendCommands("rom view")
 		ft->reciveData(buf,BUFSIZE)
 		printf(ex"[%04X] %04X\n",i,data)
 		Dump(buf,BUFSIZE,i*BUFSIZE)
@@ -167,44 +225,47 @@ Do
 	Print
 Loop
 
-Const FTE_SECTOR_SIZE = 64*64
+Const FTE_READ_BLOCK_SIZE = 64*512'64
 Sub RomDumpFull(length AS DWord)
 	Dim i AS DWord,out AS File,buf AS BytePtr,last AS DWord,qtes AS DWord
-	buf=calloc(FTE_SECTOR_SIZE)
+	buf=calloc(FTE_READ_BLOCK_SIZE)
 	out.openFile("dump.bin",GENERIC_WRITE)
 	Do
-		if i Mod 10 = 0 Then 
+		if i Mod 1 = 0 Then 
 			printf(ex"[DUMP] ADDRESS%08X/%08X ... %3d%% [%3dKB/s]\n", _
-				i*FTE_SECTOR_SIZE,length,((i*FTE_SECTOR_SIZE)/length*100) AS DWord, _
-				( (FTE_SECTOR_SIZE) / ((GetTickCount()-last)/1000)/1000   ) AS DWord, _
+				i*FTE_READ_BLOCK_SIZE,length,((i*FTE_READ_BLOCK_SIZE)/length*100) AS DWord, _
+				( (FTE_READ_BLOCK_SIZE) / ((GetTickCount()-last)/1000)/1000   ) AS DWord, _
 			) 
 		'	ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H2))
 		'	flush(ft->hFT)
 		Endif
 
 		last=GetTickCount()
-		fe->AreaReadRequest(i*FTE_SECTOR_SIZE,FTE_SECTOR_SIZE)
-		ft->sendCommands()
-		ft->reciveData(buf,FTE_SECTOR_SIZE)
-		out.write(buf,FTE_SECTOR_SIZE)
+		fe->AreaReadRequest(i*FTE_READ_BLOCK_SIZE,FTE_READ_BLOCK_SIZE)
+		ft->sendCommands("DumpRom block read")
+		ft->reciveData(buf,FTE_READ_BLOCK_SIZE)
+		out.write(buf,FTE_READ_BLOCK_SIZE)
 		i++
-		if i*FTE_SECTOR_SIZE => length Then ExitDo
+		if i*FTE_READ_BLOCK_SIZE => length Then ExitDo
 	Loop
 	out.close()
 	free(buf)
 
 End Sub
-	Sub flush(hFT AS HANDLE)
-		Dim ftStatus As Long,bufsize As DWord,buf As BytePtr,dwAB As DWord
-		
-		ftStatus = ftStatus or FT_GetQueueStatus(hFT, bufsize)		 ' Get the number of bytes in the FT2232H receive buffer
-		buf=calloc(bufsize)
-		if bufsize>0 then Print bufsize
+
+Sub flush(hFT AS HANDLE)
+	Dim ftStatus As Long,bufsize As DWord,buf As BytePtr,dwAB As DWord
+	
+	ftStatus = ftStatus or FT_GetQueueStatus(hFT, bufsize)		 ' Get the number of bytes in the FT2232H receive buffer
+	buf=calloc(bufsize)
+	if bufsize>0 then Print bufsize
 
 		if (ftStatus = FT_OK) And  (bufsize > 0) Then _
 			FT_Read(hFT, buf, bufsize, dwAB)  'Read out the data from FT2232H receive buffer
 		free(buf)
 	End Sub
+
+Const FTE_WRITE_BLOCK_SIZE = 64*256
 Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 	Dim in AS File
 	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
@@ -222,7 +283,7 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 	do
 		printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
 		
-		if fe->AreaWirte(i,buffer+i,FTE_SECTOR_SIZE)=FALSE Then
+		if fe->AreaWirte(i,buffer+i,FTE_WRITE_BLOCK_SIZE)=FALSE Then
 			printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",i,buffer[i])
 			input ">",tmp
 
@@ -234,8 +295,9 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 				continue
 			End If
 		End If
+'		ft->sendCommands("WriteRom block write")	
 
-		i+=FTE_SECTOR_SIZE
+		i+=FTE_WRITE_BLOCK_SIZE
 		if i => length Then ExitDo
 
 	Loop
@@ -245,7 +307,7 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 
 	free(buffer)
 
-	ft->sendCommands()
+	ft->sendCommands("WriteRom Finalize")
 	in.close()
 End Sub
 
@@ -253,7 +315,7 @@ Sub ZeroFillROM(offset As DWord , RomSize AS DWord)
 	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
 	Dim ProcSize As DWord
 
-	ProcSize=FTE_SECTOR_SIZE*2
+	ProcSize=FTE_READ_BLOCK_SIZE*2
 	buffer = calloc(ProcSize)
 	FillMemory(buffer,ProcSize,0)
 	length = RomSize
@@ -321,7 +383,7 @@ End Sub
 Sub CompROM(fileName AS BytePtr,offset AS DWord)
 	Dim in AS File
 	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
-	Dim romBuf[FTE_SECTOR_SIZE] AS Byte
+	Dim romBuf[FTE_READ_BLOCK_SIZE] AS Byte
 
 	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
 	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
@@ -336,12 +398,12 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 	do
 		if i Mod 1024 = 0 Then printf(ex"[CHECK] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
 		
-		fe->AreaReadRequest(i,FTE_SECTOR_SIZE)
+		fe->AreaReadRequest(i,FTE_READ_BLOCK_SIZE)
 		ft->sendCommands()
-		ft->reciveData(romBuf,FTE_SECTOR_SIZE)
+		ft->reciveData(romBuf,FTE_READ_BLOCK_SIZE)
 
 		Dim c AS DWord
-		For c=0 To FTE_SECTOR_SIZE-1
+		For c=0 To FTE_READ_BLOCK_SIZE-1
 			if buffer[i+c]<>romBuf[c] Then
 				printf("[CHECK] FOUND ERROR AT %08X HOST:%02X != ROM:%02X ==> ",i+c,buffer[i+c],romBuf[c])
 				if isFixableBits(buffer[i+c],romBuf[c])=FALSE Then
@@ -359,7 +421,7 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 					if tmp="y" Then
 						fe->AreaWirte(i+c,buffer+i+c,1)
 					Elseif tmp="a" Then
-						fe->AreaWirte(i,buffer+i,FTE_SECTOR_SIZE)
+						fe->AreaWirte(i,buffer+i,FTE_READ_BLOCK_SIZE)
 					Else
 						Goto *FTE_CR_NOFIX
 					End If
@@ -368,7 +430,7 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 			*FTE_CR_NOFIX
 		Next c
 
-		i+=FTE_SECTOR_SIZE
+		i+=FTE_READ_BLOCK_SIZE
 		if i > length Then ExitDo
 
 	Loop
