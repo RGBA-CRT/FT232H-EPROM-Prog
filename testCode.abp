@@ -34,14 +34,18 @@ printf(ex"device #%02d open ok.\n\n",ftID)
 
 Dim rom_size_str As String
 Dim ROM_SIZE AS DWord
-Input ex"Enter ROM Size (ex:32Mbit -> 4MB)\n>",rom_size_str
+'Input ex"Enter ROM Size (ex:32Mbit -> 4MB)\n>",rom_size_str
 rcAsciiToInt(rom_size_str, VarPtr(ROM_SIZE),10,TRUE)
 if ROM_SIZE=0 Then ROM_SIZE=&H400000
 printf(ex"Rom Size = %dMbit\n\n",ROM_SIZE/&H100000*8)
 
-Print ex"All Commands:\n  1.WriteEnable     6.SetAddress Zero   11.AddressBusTest  \n  2.WriteDisable    7.WriteROM          12.FlashProgTest   \n  3.ReadTest        8.CompROM           13.FlashProg       "
-Print ex"  4.BufferTest      9.WriteTest         14.SetAddress  \n  5.DumpROM        10.EraseFlash        15.Rom<->File Check\n"
-Print ex"Command Menu :\n  5.DumpROM\n  7.WriteROM\n  8.CompROM\n 15.BlankCheck\n"
+Sub PrintUsage()
+	Print ex"All Commands:\n  1.WriteEnable     6.SetAddress Zero   11.AddressBusTest  \n  2.WriteDisable    7.WriteROM          12.FlashProgTest   \n  3.ReadTest        8.CompROM           13.FlashProg       "
+	Print ex"  4.BufferTest      9.WriteTest         14.SetAddress  \n  5.DumpROM        10.EraseFlash        15.Blank Check    18.Blank Check(Deep)\n"
+	Print ex"Command Menu :\n  5.DumpROM\n  7.WriteROM\n  8.CompROM\n 15.BlankCheck\n"
+End Sub
+
+PrintUsage()
 Dim ff AS *FT232H_FLASH
 ff=New FT232H_FLASH(ft)
 
@@ -53,18 +57,20 @@ fe->ReadEnable(TRUE)
 Const BUFSIZE=64*4
 Dim i AS DWord,data AS Byte,fileName AS String
 Dim buf[1024+BUFSIZE] AS Byte
+Dim cmd As String
 i=0'&H1fe00/64-2
 
 Do
 
 	ft->sendCommands("before menu")
-	Input ">",ftID
+	Input ">",cmd
+	rcAsciiToInt(cmd,VarPtr(ftID))
 	if ftID=9999901 Then
 		fe->WriteEnable(TRUE)
 		'fe->ReadEnable(TRUE)
 		Print "Write enable"
 
-	Elseif ftID=999902 Then
+	Elseif ftID=9999902 Then
 		fe->WriteEnable(FALSE)
 		'fe->ReadEnable(FALSE)
 		Print "Write disable"
@@ -96,7 +102,7 @@ Do
 	Elseif ftID=8 Then
 		Print "comp ROM"
 		Input "Enter File Name : ",fileName
-		CompROM(fileName,0)
+		CompROM(StrPtr(fileName),0)
 
 	Elseif ftID=9 Then
 		Const tx ="書き込みテスト(kiban)"
@@ -112,9 +118,16 @@ Do
 		Endif
 		
 	Elseif ftID=11 Then
-		for i = 0 TO 32
-			ff->SetAddress(1<<i)
-			Print Hex$(1<<i)
+		for i = 0 TO 31
+			if i<8 then
+				ff->SetData(1<<i)
+				ff->SetAddress(0)
+				printf(ex"D%d\n",i)
+			Else
+				ff->SetData(0)
+				ff->SetAddress(1<<(i-8))
+				printf(ex"A%d\n",i-8)
+			endif
 			ft->sendCommands()
 			Input "enter>",ftID
 		Next
@@ -140,6 +153,7 @@ Do
 		Dim ffCount AS DWord,i2 AS Long, errCount As BOOL
 		ffCount=0
 		i2=0
+		errCount=0
 		Const CHECK_STEP = 8
 		For i=0 To (ROM_SIZE/1024) Step CHECK_STEP
 			printf(ex"checking...%d%% (%d%%)         ",(i/(ROM_SIZE/1024))*100,(ffCount/(i*1024))*100*CHECK_STEP)
@@ -159,10 +173,10 @@ Do
 			Next i2
 		Next i
 		printf(ex"\nBlank率：%d%%\n",ffCount/(ROM_SIZE)*100*CHECK_STEP)
-		if ffCount <> 0 Then
-			PrintPtr(ex"Blank!!!\n")
-		Else
+		if errCount Then
 			PrintPtr(ex"NOT BLANK\n")
+		Else
+			PrintPtr(ex"Blank!!!\n")
 		End If
 
 	Elseif ftID=18 then 
@@ -211,6 +225,8 @@ Do
 		ft->reciveData(buf,BUFSIZE)
 		printf(ex"[%04X] %04X\n",i,data)
 		Dump(buf,BUFSIZE,i*BUFSIZE)
+	elseif cmd="?" OR cmd="help" then
+		PrintUsage()
 
 	Else
 '		if i=0 Then i=1
@@ -225,7 +241,7 @@ Do
 	Print
 Loop
 
-Const FTE_READ_BLOCK_SIZE = 64*512'64
+Const FTE_READ_BLOCK_SIZE = (64*512) As Long'64
 Sub RomDumpFull(length AS DWord)
 	Dim i AS DWord,out AS File,buf AS BytePtr,last AS DWord,qtes AS DWord
 	buf=calloc(FTE_READ_BLOCK_SIZE)
@@ -269,6 +285,7 @@ Const FTE_WRITE_BLOCK_SIZE = 64*256
 Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 	Dim in AS File
 	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
+	Dim retry  As Long
 
 	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
 	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
@@ -284,14 +301,20 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 		printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
 		
 		if fe->AreaWirte(i,buffer+i,FTE_WRITE_BLOCK_SIZE)=FALSE Then
-			printf(ex"[WRITE] write error at Address 0x%08X:%02X\nPRESS ENTER\n",i,buffer[i])
-			input ">",tmp
+			printf(ex"[WRITE] write error at Address 0x%08X:%02X\n",i,buffer[i])
+			if retry>1 then
+				Print "PRESS ENTER: retry, 's': skip, 'e':abort&exit"
+				input ">",tmp
+			Else
+				tmp=""
+			endif
 
 			Print
 			if tmp="e" Then ExitDo
 			if tmp="s" Then 
 				Print "skip"
 			Else
+				retry++
 				continue
 			End If
 		End If
@@ -299,7 +322,7 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 
 		i+=FTE_WRITE_BLOCK_SIZE
 		if i => length Then ExitDo
-
+		retry = 0
 	Loop
 	lap_e=GetTickCount()
 	flush(ft->hFT)
@@ -383,20 +406,19 @@ End Sub
 Sub CompROM(fileName AS BytePtr,offset AS DWord)
 	Dim in AS File
 	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
-	Dim romBuf[FTE_READ_BLOCK_SIZE] AS Byte
+	Dim romBuf AS BytePtr
 
 	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
 	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
 
+	romBuf=calloc(FTE_READ_BLOCK_SIZE)
 	buffer = calloc(in.length())
 	in.read(buffer,in.length())
 	length = in.length()
 	i=offset
-
 	Dim lap_s AS DWord,lap_e AS DWord
-	lap_s=GetTickCount()
 	do
-		if i Mod 1024 = 0 Then printf(ex"[CHECK] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
+		/*if i Mod 1024 = 0 Then */printf(ex"[CHECK] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
 		
 		fe->AreaReadRequest(i,FTE_READ_BLOCK_SIZE)
 		ft->sendCommands()
@@ -439,6 +461,7 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 
 	ft->sendCommands()
 	in.close()
+	free(romBuf)
 End Sub
 
 Function isFixableBits(HostData AS Byte,RomData AS Byte)
