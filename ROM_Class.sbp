@@ -83,9 +83,21 @@ Public
 			SetLatch(adr>>16)
 		End If
 
-		mcp->SetPortValWord(adr AS Word)
+		if (((adr xor Address) >> 8) And &HFF) or forceLatch Then
+			mcp->SetPortValWord(adr AS Word)
+		Else
+			mcp->SetPortValA(adr AS Word)
+		End If
 
 		Address=adr
+	End Sub
+
+	Sub DumpAddress()
+		mcp->ReadPortRequestWord()
+		ft->sendCommands()
+		Dim adr as word
+		ft->reciveData(VarPtr(adr),2)
+		printf(ex"MCP GPIO=%0xh\n", adr)
 	End Sub
 
 	Sub SetData(data AS Byte)
@@ -99,20 +111,31 @@ Public
 		ft->gpio->ACBusReadRequest()
 	End Sub
 
-	Sub AreaReadRequest(adr AS DWord,length As DWord)
+	Sub AreaReadRequest(adr AS DWord,length As DWord)(bRD_pulse AS BOOL)
 		Dim i aS DWord
-		ROMEnable(TRUE)
-		ReadEnable(TRUE)
-		if dir=FTE_OUTPUT Then SetDatabusDirection(FTE_INPUT)
-	'	ft->addCommand(ex"\x9c\xa0\x00",3)	'wait
+		SetDatabusDirection(FTE_INPUT)
+		bRD_pulse=TRUE
+
+		if bRD_pulse Then 
+			ReadEnable(FALSE)
+		Else
+			ReadEnable(TRUE)
+		End If
+
 		Do
 			SetAddress(adr+i)
-			ROMEnable(TRUE)
-			ReadEnable(TRUE)
-	'		ft->addCommand(ex"\x9c\x09\x00",3)
+			if bRD_pulse Then 
+				ft->clockWithNoData(1)
+				ReadEnable(TRUE)
+				ft->clockWithNoData(3)
+			endif
+	
 			ft->gpio->ACBusReadRequest()
+			
+			if bRD_pulse Then ReadEnable(FALSE)				'ämé¿Ç…Ç¢ÇÈ
 			i++
 			if length<=i Then ExitDo
+
 		Loop
 	End Sub
 
@@ -138,11 +161,24 @@ Public
 Private
 
 	Sub SetLatch(val AS Byte)
+#ifdef 74HC373
 		ft->gpio->setADBusBit(FT_EPROM_LATCH_PIN,1)		'LATCH START
 		mcp->SetPortValA(val)							'LATCH SET
 		ft->addCommand(ex"\x9c\x39\x00",3)				'Wait 13us
 		mcp->SetPortValA(val)							'LATCH SET
 		ft->gpio->setADBusBit(FT_EPROM_LATCH_PIN,0)		'LATCH HOLD
+#else
+		Dim cmd[4] As Byte
+		cmd[0]=LSB_NEGATIVE_EDGE_BYTES_OUT	' SERIAL WRITE COMMAND
+		cmd[1]=0			' LEN LOW
+		cmd[2]=0			' LEN HIGH
+		cmd[3]=val			' WRITE VALUE
+	'	printf(ex"latch=%x\n",val)
+		ft->addCommand(cmd,4)
+		ft->gpio->setADBusBit(FT_EPROM_LATCH_PIN,1)		'LATCH STA
+		ft->clockWithNoData(0)
+		ft->gpio->setADBusBit(FT_EPROM_LATCH_PIN,0)		'LATCH HOLD
+#endif
 	End Sub
 	
 	Sub SetDatabusDirection(idr AS FT_EPROM_IO)

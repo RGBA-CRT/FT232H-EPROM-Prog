@@ -60,6 +60,7 @@ Dim buf[1024+BUFSIZE] AS Byte
 Dim cmd As String
 i=0'&H1fe00/64-2
 
+
 Do
 
 	ft->sendCommands("before menu")
@@ -118,17 +119,22 @@ Do
 		Endif
 		
 	Elseif ftID=11 Then
-		for i = 0 TO 31
+		for i = 0 TO 32
 			if i<8 then
 				ff->SetData(1<<i)
 				ff->SetAddress(0)
 				printf(ex"D%d\n",i)
-			Else
+			Elseif i<32 then
 				ff->SetData(0)
 				ff->SetAddress(1<<(i-8))
 				printf(ex"A%d\n",i-8)
+			else
+				ff->SetData(&HFF)
+				ff->SetAddress(&HFFFFFF)
+				printf(ex"AD ALL%d\n",i-8)
 			endif
 			ft->sendCommands()
+			fe->DumpAddress()
 			Input "enter>",ftID
 		Next
 
@@ -302,8 +308,9 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 		
 		if fe->AreaWirte(i,buffer+i,FTE_WRITE_BLOCK_SIZE)=FALSE Then
 			printf(ex"[WRITE] write error at Address 0x%08X:%02X\n",i,buffer[i])
+*INPUT_RETRY
 			if retry>1 then
-				Print "PRESS ENTER: retry, 's': skip, 'e':abort&exit"
+				Print "PRESS ENTER: retry, 's': skip, 'e':abort&exit, 'd':dump"
 				input ">",tmp
 			Else
 				tmp=""
@@ -313,6 +320,14 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 			if tmp="e" Then ExitDo
 			if tmp="s" Then 
 				Print "skip"
+			Elseif tmp="d" Then 
+				dim dump_buf[255] as byte
+				fe->AreaReadRequest(i, 256)
+				ft->sendCommands("writeROM test read")
+				ft->reciveData(dump_buf,256)
+				Dump(dump_buf, 256, i)
+
+				goto *INPUT_RETRY
 			Else
 				retry++
 				continue
