@@ -13,7 +13,7 @@
 
 #console
 
-Print "FT232H-EPROM-PROGRAMMER Test Program - RGBA_CRT 2017 v1.1"
+Print "FT232H-EPROM-PROGRAMMER Test Program - RGBA_CRT 2017-2023 v2.0"
 Print
 Print "Please use at your own risk!"
 Print 
@@ -40,9 +40,22 @@ if ROM_SIZE=0 Then ROM_SIZE=&H400000
 printf(ex"Rom Size = %dMbit\n\n",ROM_SIZE/&H100000*8)
 
 Sub PrintUsage()
-	Print ex"All Commands:\n  1.WriteEnable     6.SetAddress Zero   11.AddressBusTest  \n  2.WriteDisable    7.WriteROM          12.FlashProgTest   \n  3.ReadTest        8.CompROM           13.FlashProg       "
-	Print ex"  4.BufferTest      9.WriteTest         14.SetAddress  \n  5.DumpROM        10.EraseFlash        15.Blank Check    18.Blank Check(Deep)\n"
-	Print ex"Command Menu :\n  5.DumpROM\n  7.WriteROM\n  8.CompROM\n 15.BlankCheck\n"
+	'Print ex"All Commands:\n  1.WriteEnable     6.SetAddress Zero   11.AddressBusTest  \n  2.WriteDisable    7.WriteROM          12.FlashProgTest   \n  3.ReadTest        8.CompROM           13.FlashProg       "
+	'Print ex"  4.BufferTest      9.WriteTest         14.SetAddress  \n  5.DumpROM        10.EraseFlash        15.Blank Check    18.Blank Check(Deep)\n"
+'	Print ex"Command Menu :\n  5.DumpROM\n  7.WriteROM\n  8.CompROM\n 15.BlankCheck\n"
+	Print ex"Sub commands:\n" + _
+		  ex"  [ENTER]  ... Print few bytes of ROM to console.\n" + _
+		  ex"  set      ... Set address for print ROM.\n" + _
+		  ex"  dump     ... Dump ROM image to dump.bin.\n" + _
+		  ex"  dumpn    ... Dump ROM image to files with any filenames.\n" + _
+		  ex"  write    ... Write ROM image to EPROM.\n" + _
+		  ex"  blank    ... Check for EPROM blanks (Fast, skip most bytes).\n" + _
+		  ex"  blankd   ... Check for EPROM blanks (Deep, check every byte).\n" + _
+		  ex"  compare  ... Compare ROM image and EPROM."
+	Print ex"  bustest  ... Test data bus and address bus (use multimeter).\n" + _
+		  ex"  snes     ... Print snes header from EPROM.\n" + _
+		  ex"  ? / help ... Show this usage.\n" + _
+		  ex"  ZERO_FILL_ALL_ROM  ... Fill zero to EPROM.\n" 
 End Sub
 
 
@@ -69,59 +82,40 @@ Do
 	ft->sendCommands("before menu")
 	Input ">",cmd
 	rcAsciiToInt(cmd,VarPtr(ftID))
-	if ftID=9999901 Then
+	if ftID=9999901 or cmd="DEBUG_WRITE_ENABLE" Then
 		fe->WriteEnable(TRUE)
 		'fe->ReadEnable(TRUE)
 		Print "Write enable"
 
-	Elseif ftID=9999902 Then
+	Elseif ftID=9999902 or cmd="DEBUG_WRITE_DISABLE" Then
 		fe->WriteEnable(FALSE)
 		'fe->ReadEnable(FALSE)
 		Print "Write disable"
 
-	Else if ftID=3 Then
-		fe->AreaReadRequest(&HFF9D0,64)
-		ft->sendCommands()
-		ft->reciveData(buf,64)
-		Dump(buf,64,&Hff9d0)
-
-
-		/*fe->SetAddress(&H00000000)
-		buf[0]=fe->WriteByte(&H03)
-		ft->sendCommands()*/
-		
-	Elseif ftID=4 Then
-		buffertest()
-	Elseif ftID=5 Then
-		RomDumpFull(ROM_SIZE)'&H100000)
+	Elseif ftID=5 or cmd="dump" Then
+		RomDumpFull(ROM_SIZE,"dump.bin")
 		Print "saved to dump.bin"
-	Elseif ftID=6 then
+
+	Elseif cmd="dumpn" Then
+		Input "Enter File Name : ",fileName
+		RomDumpFull(ROM_SIZE,fileName)
+		printf(EX"saved to %s\n", fileName)
+
+	Elseif ftID=6 or cmd="zero" then
 		i=0
-	Elseif ftID=7 Then
+
+	Elseif ftID=7 or cmd="write" Then
 		Print "Write ROM"
 		Input "Enter File Name : ",fileName
 		WriteROM(fileName,0)
 
 
-	Elseif ftID=8 Then
+	Elseif ftID=8 or cmd="compare" Then
 		Print "comp ROM"
 		Input "Enter File Name : ",fileName
 		CompROM(StrPtr(fileName),0)
-
-	Elseif ftID=9 Then
-		Const tx ="書き込みテスト(kiban)"
-		fe->AreaWirte(&HFFa11,tx,lstrlen(tx))
-		ft->sendCommands()
-
-	Elseif ftID=10 Then
-		Input "Erase chip? [0/1] ",ftID
-		if ftID=1 Then
-			Print "Eraceing..."
-			ff->ChipErase()
-			Print "Done."
-		Endif
 		
-	Elseif ftID=11 Then
+	Elseif ftID=11 or cmd="bustest" Then
 		for i = 0 TO 32
 			if i<8 then
 				ff->SetData(1<<i)
@@ -141,24 +135,12 @@ Do
 			Input "enter>",ftID
 		Next
 
-	Elseif ftID=12 Then
-	'	ff->ProtectDisable()
-		ft->sendCommands()
-		
-		ff->WriteStart()
-		ff->FlashCommand(&H0001,&H31)
-		ff->FlashCommand(&H0002,&H32)
-		ff->FlashCommand(&H0003,&H33)
-	Elseif ftID=13 Then
-		Input "Enter File Name : ";fileName
-		WriteFlash(fileName,0)
-
-	Elseif ftID=14 Then
-		Input ex"Enter Address (ex:&H0710)\n>",fileName
+	Elseif ftID=14 or cmd="set" Then
+		Input ex"Enter Address (ex:0x0710)\n>",fileName
 		rcAsciiToInt(fileName,VarPtr(i))
 		i=i/BUFSIZE
 
-	Elseif ftID=15 then 
+	Elseif ftID=15 or cmd="blank" then 
 		Dim ffCount AS DWord,i2 AS Long, errCount As BOOL
 		ffCount=0
 		i2=0
@@ -188,7 +170,7 @@ Do
 			PrintPtr(ex"Blank!!!\n")
 		End If
 
-	Elseif ftID=18 then 
+	Elseif ftID=18 or cmd="blankd" then 
 		ffCount=0
 		i2=0
 		For i=0 To (ROM_SIZE/1024) 
@@ -207,33 +189,12 @@ Do
 		Next i
 		printf(ex"\nROM is Empty.\n")
 *DEEP_CHECK_EXIT
-	Elseif ftID=16 then 
-		i=0
 
-	Elseif ftID=17 then 
+	Elseif ftID=17 or cmd="ZERO_FILL_ALL_ROM" then 
 		Print "Erace ROM (zero fill) "
 		Input "continue? (y/n) >",fileName
 		if fileName="y" then ZeroFillROM(0,ROM_SIZE)
 
-	Elseif ftID=99 Then
-		fe->AreaReadRequest(i*BUFSIZE,BUFSIZE)
-		ft->sendCommands()
-		ft->reciveData(buf,BUFSIZE)
-		printf(ex"[%04X] %04X\n",i,data)
-		Dump(buf,BUFSIZE,i*BUFSIZE)
-
-	Elseif ftID=98 Then
-		fe->AreaReadRequest(&H7FA0,BUFSIZE)
-		ft->sendCommands()
-		ft->reciveData(buf,BUFSIZE)
-		printf(ex"[%04X] %04X\n",i,data)
-		Dump(buf,BUFSIZE,i*BUFSIZE)
-
-		fe->AreaReadRequest(&HFFA0,BUFSIZE)
-		ft->sendCommands()
-		ft->reciveData(buf,BUFSIZE)
-		printf(ex"[%04X] %04X\n",i,data)
-		Dump(buf,BUFSIZE,i*BUFSIZE)
 	elseif cmd="?" OR cmd="help" then
 		PrintUsage()
 	elseif cmd="ledon" then
@@ -241,24 +202,43 @@ Do
 	elseif cmd="ledoff" then
 		FT_ClrDtr(ft->hFT)
 
+	elseif cmd="snes" then
+		Print "SNSE HEADER for LoROM"
+		PrintRom(&H7FB0,64+16)
+		Print "SNSE HEADER for HiROM"
+		PrintRom(&HFFB0,64+16)
+		
+	elseif cmd="snes_all" then
+		PrintRom(&H7FC0,48)
+		PrintRom(&HFFC0,48)
+		PrintRom(&H100000 + &H7FC0,48)
+		PrintRom(&H100000 + &HFFC0,48)
+		PrintRom(&H200000 + &H7FC0,48)
+		PrintRom(&H200000 + &HFFC0,48)
+		PrintRom(&H300000 + &H7FC0,48)
+		PrintRom(&H300000 + &HFFC0,48)
+		
 	Else
-'		if i=0 Then i=1
-		fe->AreaReadRequest(i*BUFSIZE,BUFSIZE)
-		ft->sendCommands("rom view")
-		ft->reciveData(buf,BUFSIZE)
-		printf(ex"[%04X] %04X\n",i,data)
-		Dump(buf,BUFSIZE,i*BUFSIZE)
-		i++' = NOT(i)
-	'	i=264
+		PrintRom(i*BUFSIZE,BUFSIZE)
+		i++
 	Endif
 	Print
 Loop
 
+Sub PrintRom(address As DWord, size As DWord)
+	Dim buf[1024] As Byte
+	if size > 1024 then size=1024
+	fe->AreaReadRequest(address,size)
+	ft->sendCommands("rom view")
+	ft->reciveData(buf,size)
+	Dump(buf,size,address)
+End Sub
+
 Const FTE_READ_BLOCK_SIZE = (64*512) As Long'64
-Sub RomDumpFull(length AS DWord)
+Sub RomDumpFull(length AS DWord, filename AS BytePtr)
 	Dim i AS DWord,out AS File,buf AS BytePtr,last AS DWord,qtes AS DWord
 	buf=calloc(FTE_READ_BLOCK_SIZE)
-	out.openFile("dump.bin",GENERIC_WRITE)
+	out.openFile(filename,GENERIC_WRITE)
 	Do
 		Dim Address As DWord
 		Address = i*FTE_READ_BLOCK_SIZE
@@ -478,6 +458,7 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 		Dim c AS DWord
 		For c=0 To FTE_READ_BLOCK_SIZE-1
 			if buffer[i+c]<>romBuf[c] Then
+*REASK
 				printf("[CHECK] FOUND ERROR AT %08X HOST:%02X != ROM:%02X ==> ",i+c,buffer[i+c],romBuf[c])
 				if isFixableBits(buffer[i+c],romBuf[c])=FALSE Then
 					SetConsoleColor(CC_RED)
@@ -489,12 +470,26 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 					Print "修復可能"
 					SetConsoleColor(CC_DEFAULT)
 				End If
-					Input "fix it?[y/n/a]",tmp
+					Input "fix it?[y/n/a/p/q/?]",tmp
 					Print
 					if tmp="y" Then
 						fe->AreaWirte(i+c,buffer+i+c,1)
 					Elseif tmp="a" Then
 						fe->AreaWirte(i,buffer+i,FTE_READ_BLOCK_SIZE)
+					Elseif tmp="p" then
+						Dim dumpsize=48 AS DWord, dumpoffset AS DWord
+						dumpoffset=i+c - ((i+c) mod 16)
+						printf(ex"IMAGE DATA:\n")
+						Dump(buffer+dumpoffset, dumpsize, dumpoffset)
+						printf(ex"CURRENT ROM:\n")
+						TestDump(dumpoffset)
+						goto *REASK
+					Elseif tmp="?" Then
+						Print "compare help: y=yes, n=no, a=yes all, p=print data, q=quit, ?=print this help"
+						Print
+						goto *REASK
+					Elseif tmp="q" then
+						goto *EXIT_COMPARE
 					Else
 						Goto *FTE_CR_NOFIX
 					End If
@@ -507,6 +502,7 @@ Sub CompROM(fileName AS BytePtr,offset AS DWord)
 		if i > length Then ExitDo
 
 	Loop
+*EXIT_COMPARE
 	lap_e=GetTickCount()
 	printf(ex"[WRITE] PROGRESS COMPLATE! time:%d\n",lap_e-lap_s)
 

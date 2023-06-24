@@ -6,4 +6,3 @@
 
 'プロジェクト内のプログラム ファイル
 #include "ROM_Class.sbp"
-#include "..\FT232HLib_debug.sbp"
