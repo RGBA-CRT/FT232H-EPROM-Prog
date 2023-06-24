@@ -45,6 +45,9 @@ Sub PrintUsage()
 	Print ex"Command Menu :\n  5.DumpROM\n  7.WriteROM\n  8.CompROM\n 15.BlankCheck\n"
 End Sub
 
+
+ft->gpio->setExtACBus(0)
+
 PrintUsage()
 Dim ff AS *FT232H_FLASH
 ff=New FT232H_FLASH(ft)
@@ -233,6 +236,10 @@ Do
 		Dump(buf,BUFSIZE,i*BUFSIZE)
 	elseif cmd="?" OR cmd="help" then
 		PrintUsage()
+	elseif cmd="ledon" then
+		FT_SetDtr(ft->hFT)
+	elseif cmd="ledoff" then
+		FT_ClrDtr(ft->hFT)
 
 	Else
 '		if i=0 Then i=1
@@ -253,13 +260,17 @@ Sub RomDumpFull(length AS DWord)
 	buf=calloc(FTE_READ_BLOCK_SIZE)
 	out.openFile("dump.bin",GENERIC_WRITE)
 	Do
+		Dim Address As DWord
+		Address = i*FTE_READ_BLOCK_SIZE
 		if i Mod 1 = 0 Then 
-			printf(ex"[DUMP] ADDRESS%08X/%08X ... %3d%% [%3dKB/s]\n", _
-				i*FTE_READ_BLOCK_SIZE,length,((i*FTE_READ_BLOCK_SIZE)/length*100) AS DWord, _
+			printf(ex"[DUMP] %06Xh-%06Xh / %06Xh ... %3d%% [%3dKB/s]\n", _
+				Address,Address+FTE_READ_BLOCK_SIZE-1, _
+				length, (Address/length*100) AS DWord, _
 				( (FTE_READ_BLOCK_SIZE) / ((GetTickCount()-last)/1000)/1000   ) AS DWord, _
 			) 
-		'	ft->gpio->setExtACBus(NOT((i/10) AS Byte And &H2))
-		'	flush(ft->hFT)
+			'ft->gpio->setExtACBus(i)
+			'ft->spi->reload()
+			'flush(ft->hFT)
 		Endif
 
 		last=GetTickCount()
@@ -287,11 +298,23 @@ Sub flush(hFT AS HANDLE)
 		free(buf)
 	End Sub
 
+
+Sub TestDump(offset As DWord)
+	Const TEST_DUMP_SIZE = 48
+	'if offset > 16 then offset-=16
+				dim dump_buf[TEST_DUMP_SIZE] as byte
+				fe->AreaReadRequest(offset, TEST_DUMP_SIZE)
+				ft->sendCommands("writeROM test read")
+				ft->reciveData(dump_buf,TEST_DUMP_SIZE)
+				Dump(dump_buf, TEST_DUMP_SIZE, offset)
+End Sub
+
 Const FTE_WRITE_BLOCK_SIZE = 64*256
-Sub WriteROM(fileName AS BytePtr,offset AS DWord)
+Sub WriteROM(fileName AS BytePtr,offset_in AS DWord)
 	Dim in AS File
-	Dim buffer AS BytePtr, i AS DWord ,length AS DWord,tmp AS String
+	Dim buffer AS BytePtr, offset AS DWord ,length AS DWord,tmp AS String
 	Dim retry  As Long
+	Dim i As File
 
 	if in.openFile(fileName,GENERIC_READ) = FALSE Then Print "cannot open file":ExitSub
 	printf(ex"[OPENFILE] %s %dbytes 0x%Xbytes\n",fileName,in.length(),in.length())
@@ -299,17 +322,35 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 	buffer = calloc(in.length())
 	in.read(buffer,in.length())
 	length = in.length()
-	i=offset
+	offset=offset_in
 
 	Dim lap_s AS DWord,lap_e AS DWord
 	lap_s=GetTickCount()
 	do
-		printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%%  DATA:0x%02X\n",i,length,((i)/length*100) AS DWord,buffer[i])
+		Dim writeSize As DWord, verifyErrOffset As DWord
+		if length - offset > FTE_WRITE_BLOCK_SIZE then
+			writeSize = FTE_WRITE_BLOCK_SIZE
+		Else
+			writeSize = length - offset
+		endif
+		'printf(ex"[WRITE] ADDRESS:%08X/%08X ... %d%% \n",i,length,((i)/length*100) AS DWord,buffer[i])
+		printf(ex"[WRITE] %06Xh-%06Xh / %06Xh ... %3d%%\n", _
+			offset,writeSize, _
+			length, (offset*100/length) AS DWord, _
+			) 
 		
-		if fe->AreaWirte(i,buffer+i,FTE_WRITE_BLOCK_SIZE)=FALSE Then
-			printf(ex"[WRITE] write error at Address 0x%08X:%02X\n",i,buffer[i])
+		if fe->AreaWirte(offset,buffer+offset,writeSize, VarPtr(verifyErrOffset))=FALSE Then
+			printf(ex"[WRITE] write error at Address %08Xh\n",offset + verifyErrOffset)
 *INPUT_RETRY
 			if retry>1 then
+				Dim dumpsize=48 AS DWord, dumpoffset AS DWord
+				if writeSize < dumpsize then dumpsize=writeSize
+				dumpoffset=verifyErrOffset - (verifyErrOffset mod 16)
+				if dumpoffset>16 then dumpoffset-=16
+				printf(ex"WRITE DATA:\n")
+				Dump(buffer+dumpoffset, dumpsize, dumpoffset)
+				printf(ex"CURRENT ROM:\n")
+				TestDump(dumpoffset)
 				Print "PRESS ENTER: retry, 's': skip, 'e':abort&exit, 'd':dump"
 				input ">",tmp
 			Else
@@ -321,11 +362,6 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 			if tmp="s" Then 
 				Print "skip"
 			Elseif tmp="d" Then 
-				dim dump_buf[255] as byte
-				fe->AreaReadRequest(i, 256)
-				ft->sendCommands("writeROM test read")
-				ft->reciveData(dump_buf,256)
-				Dump(dump_buf, 256, i)
 
 				goto *INPUT_RETRY
 			Else
@@ -335,8 +371,8 @@ Sub WriteROM(fileName AS BytePtr,offset AS DWord)
 		End If
 '		ft->sendCommands("WriteRom block write")	
 
-		i+=FTE_WRITE_BLOCK_SIZE
-		if i => length Then ExitDo
+		offset+=writeSize
+		if offset => length Then ExitDo
 		retry = 0
 	Loop
 	lap_e=GetTickCount()

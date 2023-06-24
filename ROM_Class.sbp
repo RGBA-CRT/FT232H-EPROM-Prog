@@ -28,7 +28,7 @@ Public
 
 		ft->gpio->setACBusDir(&HFF)
 		ft->gpio->setADBusDir(&HF0)
-		mcp=new FT232H_MCP23017(ft,3)
+		mcp=new FT232H_MCP23017(ft,3,60)
 
 		mcp->SetPort(&H0000,&H0000)
 		SetLatch(0)
@@ -197,7 +197,7 @@ Public
 		init(ftc)
 	End Sub
 
-	Function AreaWirte(adr AS DWord,buffer AS BytePtr,length AS DWord) AS BOOL
+	Function AreaWirte(adr AS DWord,buffer AS BytePtr,length AS DWord)(verifyErrAddr As *DWord) AS BOOL
 		Dim i AS DWord,checkBuf AS BytePtr,tmp AS DWord
 
 	'	ft->flush()
@@ -225,6 +225,7 @@ Public
 		For i=0 To length-1
 			if buffer[i] <> checkBuf[i] Then
 				AreaWirte=FALSE	'–ß‚è’l:NG
+				if verifyErrAddr then SetDWord(verifyErrAddr, i)
 				ExitFor
 			End If
 		Next i
