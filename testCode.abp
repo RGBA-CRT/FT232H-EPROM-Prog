@@ -34,6 +34,7 @@ printf(ex"device #%02d open ok.\n\n",ftID)
 
 Dim rom_size_str As String
 Dim ROM_SIZE AS DWord
+
 'Input ex"Enter ROM Size (ex:32Mbit -> 4MB)\n>",rom_size_str
 rcAsciiToInt(rom_size_str, VarPtr(ROM_SIZE),10,TRUE)
 if ROM_SIZE=0 Then ROM_SIZE=&H400000
@@ -54,6 +55,7 @@ Sub PrintUsage()
 		  ex"  compare  ... Compare ROM image and EPROM."
 	Print ex"  bustest  ... Test data bus and address bus (use multimeter).\n" + _
 		  ex"  snes     ... Print snes header from EPROM.\n" + _
+		  ex"  size     ... Change ROM size\n" + _
 		  ex"  ? / help ... Show this usage.\n" + _
 		  ex"  ZERO_FILL_ALL_ROM  ... Fill zero to EPROM.\n" 
 End Sub
@@ -217,6 +219,12 @@ Do
 		PrintRom(&H200000 + &HFFC0,48)
 		PrintRom(&H300000 + &H7FC0,48)
 		PrintRom(&H300000 + &HFFC0,48)
+
+	elseif cmd="size" then
+		Input ex"Enter ROM Size (ex:32Mbit -> 4MB)\n>",rom_size_str
+		rcAsciiToInt(rom_size_str, VarPtr(ROM_SIZE),10,TRUE)
+		if ROM_SIZE=0 Then ROM_SIZE=&H400000
+		printf(ex"Rom Size = %dMbit\n\n",ROM_SIZE/&H100000*8)
 		
 	Else
 		PrintRom(i*BUFSIZE,BUFSIZE)
@@ -325,7 +333,7 @@ Sub WriteROM(fileName AS BytePtr,offset_in AS DWord)
 			if retry>1 then
 				Dim dumpsize=48 AS DWord, dumpoffset AS DWord
 				if writeSize < dumpsize then dumpsize=writeSize
-				dumpoffset=verifyErrOffset - (verifyErrOffset mod 16)
+				dumpoffset=offset + verifyErrOffset - (verifyErrOffset mod 16)
 				if dumpoffset>16 then dumpoffset-=16
 				printf(ex"WRITE DATA:\n")
 				Dump(buffer+dumpoffset, dumpsize, dumpoffset)

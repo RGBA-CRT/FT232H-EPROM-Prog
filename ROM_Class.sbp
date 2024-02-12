@@ -213,17 +213,26 @@ Public
 		WriteEnd()
 
 		'ft->addCommand(ex"\x9c\xa0\x00",3)	'wait 55us 0x0080
+		ROMEnable(FALSE)
+		ft->clockWithNoData(&H3)
+		ROMEnable(TRUE)		
+		ft->sendCommands("AreaWrite")
+		
+		ft->flush()
 
 		AreaWirte=TRUE '戻り値：OK
 
 		'書き込みチェック
 		checkBuf = calloc(length+5)
 		fe->AreaReadRequest(adr,length)
-		ft->sendCommands("[FT232H_EPROM] AreaWrite")
+		ft->sendCommands("[FT232H_EPROM] AreaWrite verify")
 		ft->reciveData(checkBuf,length)
 
 		For i=0 To length-1
 			if buffer[i] <> checkBuf[i] Then
+				Dump(buffer+i, 16)
+				Dump(checkBuf+i, 16)
+'				debug
 				AreaWirte=FALSE	'戻り値:NG
 				if verifyErrAddr then SetDWord(verifyErrAddr, i)
 				ExitFor
