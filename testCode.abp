@@ -184,7 +184,9 @@ Do
 			ft->reciveData(buf,1024)
 			For i2=0 To 1023 
 				if buf[i2]<>&HFF Then
+					TestDump(i*1024+i2)
 					printf(ex"\n[DeepBlankCheck] ROM is not empty ::: %08X:%02X\n\n",i*1024+i2,buf[i2])
+					
 					goto *DEEP_CHECK_EXIT
 				endif
 			Next i2
